@@ -18,6 +18,7 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 BASE_DIR = os.path.dirname(__file__)
 PROPOSALS_FOLDER = os.getenv("PROPOSALS_FOLDER", "/Users/kritagyav/Desktop/Proposal Agent/Proposal PDF")
 VECTOR_DB_PATH = os.path.join(BASE_DIR, "data", "vector_db")
+CV_INDEX_PATH = os.path.join(BASE_DIR, "data", "cv_index.json")
 TEMPLATES_PATH = os.path.join(BASE_DIR, "templates")
 OUTPUTS_PATH = os.path.join(BASE_DIR, "data", "outputs")
 os.makedirs(OUTPUTS_PATH, exist_ok=True)

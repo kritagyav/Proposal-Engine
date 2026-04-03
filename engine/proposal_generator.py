@@ -45,7 +45,7 @@ def _parse_json_response(text: str) -> dict | list:
     return json.loads(text.strip())
 
 
-def generate_proposal(rfp_text: str, client_context: dict) -> dict:
+def generate_proposal(rfp_text: str, client_context: dict, clarification_context: str = "") -> dict:
     """
     Master function: generates all proposal content from RFP + context.
     Returns structured dict with all slide content + effort estimates.
@@ -77,7 +77,8 @@ def generate_proposal(rfp_text: str, client_context: dict) -> dict:
     # Step 5: Generate technical proposal (enriched with web research + proposal intelligence)
     print("Generating technical proposal...")
     technical = _generate_technical_proposal(rfp_intel, past_context, client_context,
-                                              web_research, intelligence_context)
+                                              web_research, intelligence_context,
+                                              clarification_context)
 
     # Step 5: Generate value-add suggestions
     print("Generating leading practice value-add suggestions...")
@@ -152,7 +153,8 @@ Return only valid JSON, no other text."""
 
 def _generate_technical_proposal(rfp_intel: dict, past_context: str,
                                   ctx: dict, web_research: dict = None,
-                                  intelligence_context: str = "") -> dict:
+                                  intelligence_context: str = "",
+                                  clarification_context: str = "") -> dict:
     """
     Generate the technical proposal section by section.
     Each section gets a dedicated focused call — produces full depth.
@@ -194,7 +196,9 @@ PROPOSAL INTELLIGENCE FROM PAST WINS:
 {intelligence_context}
 
 PAST PROPOSAL EXCERPTS:
-{past_context[:2000]}"""
+{past_context[:2000]}
+
+{f"CLARIFICATION FROM PROPOSAL TEAM (high-priority context):{chr(10)}{clarification_context}" if clarification_context else ""}"""
 
     print("  Generating: Executive Summary & Understanding...")
     section1 = _gen_section1(base_context, rfp_intel, ctx)
