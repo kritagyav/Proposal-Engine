@@ -1,38 +1,59 @@
 """
-Web Research Module
-Uses Claude's built-in web search tool to research:
-1. The client organization — recent news, strategy, leadership, projects
-2. UAE/KSA sector context — regulatory changes, market conditions, trends
-3. Leading practices — what top firms are doing for this engagement type
+Web Research Module — powered by Perplexity sonar-pro
+Purpose-built for deep research with cited sources.
 
-Returns structured research that enriches proposal slides.
+Researches:
+1. Client organization — strategy, initiatives, leadership, challenges
+2. Sector context — UAE/KSA regulatory landscape, market conditions
+3. Leading practices — what top firms include in similar engagements
 """
 import json
-import anthropic
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+import os
+from openai import OpenAI
+from dotenv import load_dotenv
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+load_dotenv()
 
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
+
+def _get_perplexity_key():
+    try:
+        import streamlit as st
+        return st.secrets.get("PERPLEXITY_API_KEY") or os.getenv("PERPLEXITY_API_KEY")
+    except Exception:
+        return os.getenv("PERPLEXITY_API_KEY")
+
+
+def _get_client():
+    key = _get_perplexity_key()
+    if not key:
+        return None
+    return OpenAI(api_key=key, base_url="https://api.perplexity.ai")
 
 
 def research_client_and_context(client_name: str, sector: str,
                                  geography: str, engagement_type: str) -> dict:
     """
-    Run three parallel research threads:
-    1. Client profile & current priorities
-    2. Sector context in UAE/KSA
-    3. Leading practices for this engagement type
-    Returns unified research dict.
+    Run three research queries via Perplexity sonar-pro.
+    Falls back to empty dicts gracefully if key not configured.
     """
-    print(f"  Researching client: {client_name}...")
-    client_research = _research_client(client_name, sector, geography)
+    perplexity = _get_client()
 
-    print(f"  Researching sector context: {sector} in {geography}...")
-    sector_research = _research_sector(sector, geography)
+    if not perplexity:
+        print("  Perplexity API key not set — skipping web research.")
+        return {
+            "client_profile": {},
+            "sector_context": {},
+            "leading_practices": {},
+        }
 
-    print(f"  Researching leading practices: {engagement_type}...")
-    practice_research = _research_leading_practices(engagement_type, sector, geography)
+    print(f"  Researching client: {client_name} via Perplexity...")
+    client_research = _research_client(perplexity, client_name, sector, geography)
+
+    print(f"  Researching sector: {sector} in {geography} via Perplexity...")
+    sector_research = _research_sector(perplexity, sector, geography)
+
+    print(f"  Researching leading practices: {engagement_type} via Perplexity...")
+    practice_research = _research_leading_practices(perplexity, engagement_type, sector, geography)
 
     return {
         "client_profile": client_research,
@@ -41,145 +62,166 @@ def research_client_and_context(client_name: str, sector: str,
     }
 
 
-def _research_client(client_name: str, sector: str, geography: str) -> dict:
-    """Research the specific client organization."""
-    prompt = f"""Research the organization "{client_name}" in the {sector} sector in {geography}.
-
-Search for:
-1. What they do — core mandate, mission, key projects
-2. Recent strategic initiatives, transformation programs, or announcements (last 2 years)
-3. Leadership priorities — what their CEO/leadership is publicly focused on
-4. Known challenges or pain points they face
-5. Any relevant tenders, programs, or initiatives that relate to consulting needs
-
-After researching, return a JSON object:
-{{
-  "organization_overview": "2-3 sentence description of who they are",
-  "mandate_and_role": "Their core mandate in the sector",
-  "recent_initiatives": [
-    {{"initiative": "name", "description": "what it is", "relevance": "why it matters for our proposal"}}
-  ],
-  "leadership_priorities": ["priority 1", "priority 2", "priority 3"],
-  "known_challenges": ["challenge 1", "challenge 2", "challenge 3"],
-  "strategic_context": "2-3 sentence narrative about their current strategic moment",
-  "key_statistics": ["stat 1 with source", "stat 2 with source"],
-  "sources_used": ["source 1", "source 2"]
-}}
-
-Return only valid JSON."""
-
-    return _run_web_search_prompt(prompt)
-
-
-def _research_sector(sector: str, geography: str) -> dict:
-    """Research the sector landscape in UAE/KSA."""
-    prompt = f"""Research the current state of the {sector} sector in {geography}.
-Focus on the last 18 months.
-
-Search for:
-1. Key government policies and regulatory changes affecting this sector
-2. Major sector-wide challenges and transformation drivers
-3. Relevant national programs (e.g. UAE Vision 2031, Saudi Vision 2030 initiatives)
-4. Market size, investment levels, or growth statistics
-5. Common operational or governance challenges organizations in this sector face
-
-Return a JSON object:
-{{
-  "sector_overview": "2-3 sentence overview",
-  "regulatory_landscape": [
-    {{"regulation": "name", "impact": "how it affects organizations"}}
-  ],
-  "national_programs": [
-    {{"program": "name", "relevance": "how it creates consulting demand"}}
-  ],
-  "sector_challenges": ["challenge 1", "challenge 2", "challenge 3", "challenge 4"],
-  "transformation_drivers": ["driver 1", "driver 2", "driver 3"],
-  "market_statistics": ["statistic with source", "statistic with source"],
-  "sources_used": ["source 1", "source 2"]
-}}
-
-Return only valid JSON."""
-
-    return _run_web_search_prompt(prompt)
-
-
-def _research_leading_practices(engagement_type: str, sector: str, geography: str) -> dict:
-    """Research global leading practices for this engagement type."""
-    prompt = f"""Research global and regional leading practices for "{engagement_type}" engagements
-in the {sector} sector, with specific relevance to {geography}.
-
-Search for:
-1. What leading global consulting firms (McKinsey, KPMG, PwC, Deloitte, BCG)
-   include in similar engagements beyond the basic scope
-2. Common value-add components that differentiate top-tier proposals
-3. Digital tools, platforms, or technology accelerators used in such engagements
-4. Change management and capability building components typically included
-5. Benchmarks and maturity frameworks used globally for this engagement type
-6. Common pitfalls or failure factors in similar engagements
-7. Emerging trends relevant to this type of work in the GCC/MENA region
-
-Return a JSON object:
-{{
-  "standard_scope": ["what every firm includes"],
-  "leading_practice_additions": [
-    {{
-      "addition": "Name of value-add",
-      "description": "What it involves",
-      "why_it_matters": "Client benefit",
-      "effort_impact": "low/medium/high additional effort"
-    }}
-  ],
-  "digital_accelerators": [
-    {{"tool": "tool/platform name", "use_case": "how it applies"}}
-  ],
-  "change_management_elements": ["element 1", "element 2"],
-  "capability_building": ["what to include for client sustainability"],
-  "common_pitfalls": ["pitfall 1", "pitfall 2"],
-  "gcc_mena_specifics": ["region-specific consideration 1", "consideration 2"],
-  "benchmark_frameworks": ["framework 1", "framework 2"],
-  "sources_used": ["source 1", "source 2"]
-}}
-
-Return only valid JSON."""
-
-    return _run_web_search_prompt(prompt)
-
-
-def _run_web_search_prompt(prompt: str) -> dict:
+def _perplexity_search(client, query: str, system: str = None) -> dict:
     """
-    Run a prompt with web search enabled.
-    Claude will search the web as needed and return structured JSON.
+    Run a Perplexity sonar-pro search and return structured result.
+    Returns raw text + citations.
     """
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": query})
+
     try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=3000,
-            tools=[WEB_SEARCH_TOOL],
-            messages=[{"role": "user", "content": prompt}]
+        response = client.chat.completions.create(
+            model="sonar-pro",
+            messages=messages,
+            temperature=0.2,
         )
-
-        # Extract the final text response (after tool use)
-        final_text = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                final_text = block.text
-                break
-
-        if not final_text:
-            return {"error": "No text response from web research"}
-
-        # Clean and parse JSON
-        text = final_text.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
-
-        return json.loads(text)
-
-    except json.JSONDecodeError:
-        return {"raw_research": final_text if 'final_text' in locals() else "Research failed"}
+        text = response.choices[0].message.content
+        citations = getattr(response, "citations", []) or []
+        return {"text": text, "citations": citations}
     except Exception as e:
-        print(f"    Web research error: {e}")
-        return {"error": str(e)}
+        print(f"    Perplexity error: {e}")
+        return {"text": "", "citations": []}
+
+
+def _research_client(client, client_name: str, sector: str, geography: str) -> dict:
+    system = (
+        "You are a research analyst preparing a briefing for a senior consulting director. "
+        "Be specific, factual, and cite sources. Focus on recent developments (last 2 years)."
+    )
+    query = (
+        f"Research the organization '{client_name}' in the {sector} sector in {geography}. "
+        f"Provide: (1) what they do and their core mandate, "
+        f"(2) recent strategic initiatives or transformation programs announced in the last 2 years, "
+        f"(3) leadership priorities based on public statements, "
+        f"(4) known operational or governance challenges they face, "
+        f"(5) key statistics about their scale or portfolio. "
+        f"Be specific and factual with sources."
+    )
+    result = _perplexity_search(client, query, system)
+
+    # Parse the narrative into structured fields using a second pass
+    return _structure_client_research(result, client_name)
+
+
+def _research_sector(client, sector: str, geography: str) -> dict:
+    system = (
+        "You are a sector analyst covering real estate and infrastructure in the GCC. "
+        "Focus on factual, current information with sources."
+    )
+    query = (
+        f"What is the current state of the {sector} sector in {geography} as of 2025-2026? "
+        f"Cover: (1) key government policies and regulatory changes, "
+        f"(2) relevant national programs (Vision 2031, Saudi Vision 2030, etc.), "
+        f"(3) major sector challenges organizations face, "
+        f"(4) transformation drivers pushing organizations to seek consulting support, "
+        f"(5) market size or investment statistics. "
+        f"Be specific with data points and sources."
+    )
+    result = _perplexity_search(client, query, system)
+    return _structure_sector_research(result, sector, geography)
+
+
+def _research_leading_practices(client, engagement_type: str, sector: str, geography: str) -> dict:
+    system = (
+        "You are a management consulting expert familiar with Big 4 and top-tier firm methodologies. "
+        "Focus on what actually differentiates excellent proposals from average ones."
+    )
+    query = (
+        f"What do leading management consulting firms (McKinsey, KPMG, PwC, Deloitte, BCG, Protiviti) "
+        f"include in '{engagement_type}' engagements for the {sector} sector, "
+        f"especially in {geography}? "
+        f"Cover: (1) standard scope elements every firm includes, "
+        f"(2) value-add components that differentiate top proposals, "
+        f"(3) digital tools or accelerators commonly used, "
+        f"(4) change management and capability building elements, "
+        f"(5) GCC/MENA-specific considerations, "
+        f"(6) common failure factors to avoid. "
+        f"Be specific about what separates excellent from average engagements."
+    )
+    result = _perplexity_search(client, query, system)
+    return _structure_practice_research(result, engagement_type)
+
+
+def _structure_client_research(result: dict, client_name: str) -> dict:
+    """Convert Perplexity narrative into structured fields."""
+    text = result.get("text", "")
+    citations = result.get("citations", [])
+
+    if not text:
+        return {}
+
+    # Extract key sentences for each field using simple parsing
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+    return {
+        "organization_overview": _extract_paragraph(text, 0, 300),
+        "mandate_and_role": _extract_paragraph(text, 0, 200),
+        "strategic_context": _extract_paragraph(text, 300, 600),
+        "recent_initiatives": _extract_list_items(text, ["initiative", "program", "launch", "announced", "strategy"]),
+        "leadership_priorities": _extract_list_items(text, ["priorit", "focus", "goal", "objective", "vision"])[:4],
+        "known_challenges": _extract_list_items(text, ["challenge", "issue", "problem", "gap", "need"])[:4],
+        "key_statistics": _extract_list_items(text, ["billion", "million", "AED", "USD", "%", "thousand"])[:3],
+        "full_research": text[:2000],
+        "sources_used": [c if isinstance(c, str) else str(c) for c in citations[:5]],
+    }
+
+
+def _structure_sector_research(result: dict, sector: str, geography: str) -> dict:
+    text = result.get("text", "")
+    citations = result.get("citations", [])
+
+    if not text:
+        return {}
+
+    return {
+        "sector_overview": _extract_paragraph(text, 0, 300),
+        "transformation_drivers": _extract_list_items(text, ["driver", "push", "demand", "trend", "digital", "transform"])[:4],
+        "sector_challenges": _extract_list_items(text, ["challenge", "issue", "gap", "barrier", "shortage"])[:4],
+        "national_programs": _extract_list_items(text, ["vision", "program", "initiative", "plan", "strategy", "2030", "2031", "2033"])[:4],
+        "regulatory_landscape": _extract_list_items(text, ["regulat", "law", "policy", "mandate", "requirement", "authority"])[:3],
+        "market_statistics": _extract_list_items(text, ["billion", "million", "AED", "USD", "%", "growth"])[:3],
+        "full_research": text[:2000],
+        "sources_used": [c if isinstance(c, str) else str(c) for c in citations[:5]],
+    }
+
+
+def _structure_practice_research(result: dict, engagement_type: str) -> dict:
+    text = result.get("text", "")
+    citations = result.get("citations", [])
+
+    if not text:
+        return {}
+
+    return {
+        "standard_scope": _extract_list_items(text, ["standard", "typical", "common", "usually", "always", "every"])[:4],
+        "leading_practice_additions": _extract_list_items(text, ["leading", "best", "differentiat", "value-add", "advanced", "top"])[:5],
+        "digital_accelerators": _extract_list_items(text, ["tool", "platform", "digital", "software", "system", "technology"])[:4],
+        "change_management_elements": _extract_list_items(text, ["change", "adoption", "training", "capability", "culture"])[:3],
+        "gcc_mena_specifics": _extract_list_items(text, ["GCC", "UAE", "Saudi", "MENA", "region", "local", "Arabic"])[:3],
+        "common_pitfalls": _extract_list_items(text, ["fail", "avoid", "risk", "pitfall", "mistake", "common issue"])[:3],
+        "full_research": text[:2000],
+        "sources_used": [c if isinstance(c, str) else str(c) for c in citations[:5]],
+    }
+
+
+def _extract_paragraph(text: str, start: int, end: int) -> str:
+    """Extract a segment of text, cleaned up."""
+    segment = text[start:end].strip()
+    # Remove markdown formatting
+    segment = segment.replace("**", "").replace("##", "").replace("#", "")
+    return segment
+
+
+def _extract_list_items(text: str, keywords: list) -> list:
+    """Extract sentences/lines that contain relevant keywords."""
+    results = []
+    lines = text.split("\n")
+    for line in lines:
+        line = line.strip().lstrip("•-*123456789. ")
+        line = line.replace("**", "").replace("##", "")
+        if len(line) > 20 and any(kw.lower() in line.lower() for kw in keywords):
+            results.append(line[:200])
+    return results[:6]

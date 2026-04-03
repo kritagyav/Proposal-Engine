@@ -9,6 +9,7 @@ from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, BLENDED_RATE_USD
 from ingest.vector_store import search_similar_proposals
 from engine.web_researcher import research_client_and_context
 from engine.value_add_suggester import generate_value_add_suggestions, format_suggestions_for_slide
+from engine.proposal_intelligence import extract_proposal_intelligence, format_intelligence_for_prompt
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -68,9 +69,15 @@ def generate_proposal(rfp_text: str, client_context: dict) -> dict:
         engagement_type=rfp_intel.get("engagement_type", client_context.get("engagement_type", "")),
     )
 
-    # Step 4: Generate technical proposal (now enriched with web research)
+    # Step 4: Deep-read past proposals — NotebookLM-style intelligence extraction
+    print("Extracting intelligence from past proposals...")
+    proposal_intel = extract_proposal_intelligence(rfp_intel, similar)
+    intelligence_context = format_intelligence_for_prompt(proposal_intel)
+
+    # Step 5: Generate technical proposal (enriched with web research + proposal intelligence)
     print("Generating technical proposal...")
-    technical = _generate_technical_proposal(rfp_intel, past_context, client_context, web_research)
+    technical = _generate_technical_proposal(rfp_intel, past_context, client_context,
+                                              web_research, intelligence_context)
 
     # Step 5: Generate value-add suggestions
     print("Generating leading practice value-add suggestions...")
@@ -95,6 +102,7 @@ def generate_proposal(rfp_text: str, client_context: dict) -> dict:
         "effort_model": effort_model,
         "commercial": commercial,
         "web_research": web_research,
+        "proposal_intelligence": proposal_intel,
         "value_add_suggestions": suggestions_raw,
         "value_add_slide": value_add_slide,
         "similar_proposals_used": [s["filename"] for s in similar],
@@ -143,7 +151,8 @@ Return only valid JSON, no other text."""
 
 
 def _generate_technical_proposal(rfp_intel: dict, past_context: str,
-                                  ctx: dict, web_research: dict = None) -> dict:
+                                  ctx: dict, web_research: dict = None,
+                                  intelligence_context: str = "") -> dict:
     """Generate full technical proposal slide content, enriched with web research."""
     web_research = web_research or {}
     client_profile = web_research.get("client_profile", {})
@@ -191,6 +200,9 @@ CLIENT CONTEXT:
 - Relationship History: {ctx.get('relationship_history', 'New client')}
 - Past Engagements: {ctx.get('past_engagements', 'None mentioned')}
 - Key Differentiators to Emphasize: {ctx.get('differentiators', 'None specified')}
+
+PROPOSAL INTELLIGENCE (extracted from past winning proposals):
+{intelligence_context}
 
 RELEVANT PAST PROPOSALS (excerpts):
 {past_context_trimmed}
