@@ -364,6 +364,7 @@ def _html_cover(cover: dict, client_name: str) -> str:
 def _html_exec_summary(data: dict) -> str:
     if not data:
         return ""
+    outcomes_html = "".join([f"<li>{o}</li>" for o in data.get("key_outcomes", [])])
     return f"""
 <div class="slide" id="exec-summary">
   <div class="slide-header"><h2>Executive Summary</h2></div>
@@ -378,6 +379,7 @@ def _html_exec_summary(data: dict) -> str:
       <div>
         <div class="col-title">Our Commitment</div>
         <p class="narrative">{data.get("our_commitment", "")}</p>
+        {f'<div class="col-title" style="margin-top:1rem">Key Outcomes</div><ul class="bullets">{outcomes_html}</ul>' if outcomes_html else ""}
       </div>
     </div>
   </div>
@@ -462,18 +464,34 @@ def _html_sector_context(sector: dict, rfp: dict) -> str:
 def _html_understanding(data: dict) -> str:
     if not data:
         return ""
-    drivers = "".join([f"<li>{d}</li>" for d in data.get("key_drivers", [])])
-    challenges = "".join([f"<li>{c}</li>" for c in data.get("challenges_identified", [])])
-    factors = "".join([f"<li>{f}</li>" for f in data.get("success_factors", [])])
+    raw_drivers = data.get("key_drivers", [])
+    drivers = "".join([
+        f'<li><strong>{d["driver"]}</strong> — {d["detail"]}</li>' if isinstance(d, dict) else f"<li>{d}</li>"
+        for d in raw_drivers
+    ])
+    raw_challenges = data.get("challenges_identified", [])
+    challenges = "".join([
+        f'<li><strong>{c["challenge"]}</strong> — {c["implication"]}</li>' if isinstance(c, dict) else f"<li>{c}</li>"
+        for c in raw_challenges
+    ])
+    raw_factors = data.get("success_factors", [])
+    factors = "".join([
+        f'<li><strong>{f["factor"]}</strong> — {f["why"]}</li>' if isinstance(f, dict) else f"<li>{f}</li>"
+        for f in raw_factors
+    ])
+    narrative = data.get("context_narrative", "")
+    perspective = data.get("our_perspective", "")
     return f"""
 <div class="slide" id="understanding">
   <div class="slide-header"><h2>{data.get("title", "Our Understanding")}</h2></div>
   <div class="slide-body">
-    <div class="three-col">
+    {f'<p class="narrative">{narrative}</p>' if narrative else ""}
+    <div class="three-col" style="margin-top:1rem">
       <div><div class="col-title">Key Drivers</div><ul class="bullets">{drivers}</ul></div>
       <div><div class="col-title">Challenges Identified</div><ul class="bullets">{challenges}</ul></div>
       <div><div class="col-title">Success Factors</div><ul class="bullets">{factors}</ul></div>
     </div>
+    {f'<p class="narrative" style="margin-top:1rem;font-style:italic;border-left:3px solid var(--red);padding-left:1rem">{perspective}</p>' if perspective else ""}
   </div>
 </div>"""
 
@@ -483,10 +501,12 @@ def _html_value_proposition(data: dict) -> str:
         return ""
     vp_html = ""
     for vp in data.get("value_points", []):
+        proof = vp.get("proof_point", "")
         vp_html += f"""
         <div style="padding:0.8rem 0;border-bottom:1px solid #EEE">
           <div style="font-weight:700;color:var(--dark)">► {vp.get("point","")}</div>
           <div style="font-size:0.85rem;color:var(--gray);margin-top:0.2rem">{vp.get("detail","")}</div>
+          {f'<div style="font-size:0.78rem;color:var(--red);margin-top:0.2rem;font-style:italic">✓ {proof}</div>' if proof else ""}
         </div>"""
     diff = "".join([f"<li>{d}</li>" for d in data.get("protiviti_differentiators", [])])
     return f"""
@@ -510,7 +530,12 @@ def _html_value_proposition(data: dict) -> str:
 def _html_past_relationship(data: dict) -> str:
     if not data or not data.get("relationship_narrative"):
         return ""
-    engagements = "".join([f"<li>{e}</li>" for e in data.get("past_engagements", [])])
+    raw_eng = data.get("past_engagements", [])
+    engagements = "".join([
+        f'<li><strong>{e.get("engagement","")}</strong> ({e.get("year","")}) — {e.get("outcome","")}</li>'
+        if isinstance(e, dict) else f"<li>{e}</li>"
+        for e in raw_eng
+    ])
     return f"""
 <div class="slide">
   <div class="slide-header"><h2>{data.get("title","Our Relationship")}</h2></div>
@@ -603,25 +628,46 @@ def _html_value_add(data: dict) -> str:
 def _html_approach(data: dict) -> str:
     if not data:
         return ""
+    # Guiding principles
+    principles_html = ""
+    for p in data.get("guiding_principles", []):
+        if isinstance(p, dict):
+            principles_html += f'<li><strong>{p.get("principle","")}</strong> — {p.get("description","")}</li>'
+        else:
+            principles_html += f"<li>{p}</li>"
+    # Methodology steps
     steps_html = ""
     for i, step in enumerate(data.get("methodology_steps", []), 1):
         acts = " · ".join(step.get("activities", []))
+        desc = step.get("description", "")
         steps_html += f"""
         <div style="padding:0.6rem 0;border-bottom:1px solid #EEE">
           <div style="font-weight:700;color:var(--dark)">{i}. {step.get("step","")}</div>
-          <div style="font-size:0.82rem;color:var(--gray);margin-top:0.2rem">{acts}</div>
+          {f'<div style="font-size:0.85rem;color:var(--gray);margin-top:0.2rem">{desc}</div>' if desc else ""}
+          {f'<div style="font-size:0.78rem;color:#999;margin-top:0.2rem">{acts}</div>' if acts else ""}
         </div>"""
-    tools = "".join([f"<li>{t}</li>" for t in data.get("tools_and_accelerators", [])])
+    # Tools — handle both string and {tool, use_case, benefit} object
+    raw_tools = data.get("tools_and_accelerators", [])
+    tools = "".join([
+        f'<li><strong>{t.get("tool","")}</strong> — {t.get("use_case","")}</li>'
+        if isinstance(t, dict) else f"<li>{t}</li>"
+        for t in raw_tools
+    ])
     return f"""
 <div class="slide" id="approach">
   <div class="slide-header"><h2>{data.get("title","Our Approach &amp; Methodology")}</h2></div>
   <div class="slide-body">
     <p class="narrative">{data.get("approach_narrative","")}</p>
+    {f'<div class="col-title" style="margin-top:1rem">Guiding Principles</div><ul class="bullets">{principles_html}</ul>' if principles_html else ""}
     <div class="two-col" style="margin-top:1rem">
-      <div>{steps_html}</div>
+      <div>
+        <div class="col-title">Methodology Steps</div>
+        {steps_html}
+      </div>
       <div>
         <div class="col-title">Tools &amp; Accelerators</div>
         <ul class="bullets">{tools}</ul>
+        {f'<div class="col-title" style="margin-top:1rem">Knowledge Transfer</div><p class="narrative">{data.get("knowledge_transfer","")}</p>' if data.get("knowledge_transfer") else ""}
       </div>
     </div>
   </div>
@@ -631,7 +677,23 @@ def _html_approach(data: dict) -> str:
 def _html_governance(data: dict) -> str:
     if not data:
         return ""
-    cadence = "".join([f"<li>{c}</li>" for c in data.get("reporting_cadence", [])])
+    # governance_structure can be a dict or a string
+    gov_struct = data.get("governance_structure", "")
+    if isinstance(gov_struct, dict):
+        gov_html = "".join([
+            f'<li><strong>{k.replace("_"," ").title()}:</strong> {v}</li>'
+            for k, v in gov_struct.items()
+        ])
+        gov_narrative = f'<ul class="bullets">{gov_html}</ul>'
+    else:
+        gov_narrative = f'<p class="narrative">{gov_struct}</p>' if gov_struct else ""
+    # reporting_cadence — handle both string and {report, frequency, audience, content} objects
+    raw_cadence = data.get("reporting_cadence", [])
+    cadence = "".join([
+        f'<li><strong>{c.get("report","")}</strong> ({c.get("frequency","")}) → {c.get("audience","")} — {c.get("content","")}</li>'
+        if isinstance(c, dict) else f"<li>{c}</li>"
+        for c in raw_cadence
+    ])
     raci = data.get("raci_summary", [])
     raci_html = ""
     if raci:
@@ -648,7 +710,8 @@ def _html_governance(data: dict) -> str:
 <div class="slide" id="governance">
   <div class="slide-header"><h2>{data.get("title","Engagement Governance")}</h2></div>
   <div class="slide-body">
-    <p class="narrative">{data.get("governance_structure","")}</p>
+    <p class="narrative">{data.get("governance_narrative","")}</p>
+    {gov_narrative}
     <div class="two-col" style="margin-top:1rem">
       <div>
         <div class="col-title">Reporting Cadence</div>

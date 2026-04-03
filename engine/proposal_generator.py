@@ -153,190 +153,512 @@ Return only valid JSON, no other text."""
 def _generate_technical_proposal(rfp_intel: dict, past_context: str,
                                   ctx: dict, web_research: dict = None,
                                   intelligence_context: str = "") -> dict:
-    """Generate full technical proposal slide content, enriched with web research."""
+    """
+    Generate the technical proposal section by section.
+    Each section gets a dedicated focused call — produces full depth.
+    """
     web_research = web_research or {}
     client_profile = web_research.get("client_profile", {})
     sector_context = web_research.get("sector_context", {})
 
-    # Trim web research to key fields only to stay within token limits
-    client_summary = {
-        "overview": client_profile.get("organization_overview", ""),
-        "strategic_context": client_profile.get("strategic_context", ""),
-        "leadership_priorities": client_profile.get("leadership_priorities", [])[:3],
-        "known_challenges": client_profile.get("known_challenges", [])[:3],
-        "recent_initiatives": [
-            i.get("initiative", i) if isinstance(i, dict) else i
-            for i in client_profile.get("recent_initiatives", [])[:3]
-        ],
-    }
-    sector_summary = {
-        "overview": sector_context.get("sector_overview", ""),
-        "transformation_drivers": sector_context.get("transformation_drivers", [])[:3],
-        "sector_challenges": sector_context.get("sector_challenges", [])[:3],
-        "national_programs": [
-            p.get("program", p) if isinstance(p, dict) else p
-            for p in sector_context.get("national_programs", [])[:3]
-        ],
-    }
-
-    # Truncate past context to avoid token overflow
-    past_context_trimmed = past_context[:3000]
-
-    prompt = f"""You are a Senior Director at Protiviti Middle East writing a technical proposal.
-Protiviti's practice areas: Operating Model & Governance, ePMO, Maturity Assessments,
-Enterprise Risk Management, Project Risk Management, Operational Efficiency & Optimization.
-Geography: UAE and KSA. Industry: Real Estate & Infrastructure.
-
-CLIENT RESEARCH SUMMARY:
-{json.dumps(client_summary, indent=2)}
-
-SECTOR CONTEXT SUMMARY:
-{json.dumps(sector_summary, indent=2)}
-
-RFP INTELLIGENCE:
-{json.dumps(rfp_intel, indent=2)}
-
-CLIENT CONTEXT:
+    # Shared context block injected into every section prompt
+    base_context = f"""ENGAGEMENT CONTEXT:
+- Client: {rfp_intel.get('client_name', '')}
+- Project: {rfp_intel.get('project_title', '')}
+- Engagement Type: {rfp_intel.get('engagement_type', '')}
+- Sector: {rfp_intel.get('sector', '')}
+- Geography: {rfp_intel.get('geography', 'UAE')}
+- Core Problem: {rfp_intel.get('core_problem', '')}
+- Key Objectives: {', '.join(rfp_intel.get('key_objectives', []))}
+- Deliverables Mentioned in RFP: {', '.join(rfp_intel.get('deliverables_mentioned', []))}
+- Key Challenges: {', '.join(rfp_intel.get('key_challenges', []))}
+- Stakeholders: {', '.join(rfp_intel.get('stakeholders_mentioned', []))}
+- Timeline: {rfp_intel.get('timeline_mentioned', 'Not specified')}
 - Relationship History: {ctx.get('relationship_history', 'New client')}
-- Past Engagements: {ctx.get('past_engagements', 'None mentioned')}
-- Key Differentiators to Emphasize: {ctx.get('differentiators', 'None specified')}
+- Past Engagements: {ctx.get('past_engagements', 'None')}
+- Differentiators to Emphasize: {ctx.get('differentiators', 'None')}
 
-PROPOSAL INTELLIGENCE (extracted from past winning proposals):
+CLIENT RESEARCH:
+- Overview: {client_profile.get('organization_overview', '')}
+- Strategic Context: {client_profile.get('strategic_context', '')}
+- Leadership Priorities: {', '.join(client_profile.get('leadership_priorities', [])[:3])}
+- Known Challenges: {', '.join(client_profile.get('known_challenges', [])[:3])}
+- Recent Initiatives: {', '.join([i.get('initiative', i) if isinstance(i, dict) else i for i in client_profile.get('recent_initiatives', [])[:3]])}
+
+SECTOR CONTEXT:
+- {sector_context.get('sector_overview', '')}
+- Drivers: {', '.join(sector_context.get('transformation_drivers', [])[:3])}
+- National Programs: {', '.join([p.get('program', p) if isinstance(p, dict) else p for p in sector_context.get('national_programs', [])[:3]])}
+
+PROPOSAL INTELLIGENCE FROM PAST WINS:
 {intelligence_context}
 
-RELEVANT PAST PROPOSALS (excerpts):
-{past_context_trimmed}
+PAST PROPOSAL EXCERPTS:
+{past_context[:2000]}"""
 
-Generate a complete technical proposal with the following slides.
-For each slide, provide a title and detailed bullet-point content.
-Be specific, professional, and tailored to this client. Avoid generic consulting language.
+    print("  Generating: Executive Summary & Understanding...")
+    section1 = _gen_section1(base_context, rfp_intel, ctx)
 
-Return a JSON object with this structure:
+    print("  Generating: Value Proposition & Relationship...")
+    section2 = _gen_section2(base_context, rfp_intel, ctx)
+
+    print("  Generating: Scope of Work (detailed)...")
+    section3 = _gen_scope(base_context, rfp_intel)
+
+    print("  Generating: Approach & Methodology...")
+    section4 = _gen_approach(base_context, rfp_intel)
+
+    print("  Generating: Governance, Team & Timeline...")
+    section5 = _gen_delivery(base_context, rfp_intel)
+
+    print("  Generating: Experience, Why Protiviti & Assumptions...")
+    section6 = _gen_credibility(base_context, rfp_intel, past_context)
+
+    # Merge all sections
+    return {
+        "cover": {
+            "title": f"{rfp_intel.get('project_title', 'Technical Proposal')}",
+            "subtitle": "Technical Proposal | Confidential",
+            "client": rfp_intel.get("client_name", ""),
+            "date": "April 2026",
+        },
+        **section1,
+        **section2,
+        **section3,
+        **section4,
+        **section5,
+        **section6,
+    }
+
+
+def _gen_section1(base_context: str, rfp_intel: dict, ctx: dict) -> dict:
+    """Executive Summary + Our Understanding."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing a high-quality technical proposal.
+Protiviti Middle East specializes in: Operating Model & Governance Frameworks, ePMO & PMO Setup,
+Maturity Assessments (organizational, departmental, functional), Enterprise Risk Management,
+Project Risk Management, Policies & Procedures, Operational Efficiency & Optimization.
+We have deep UAE and KSA real estate and infrastructure sector experience.
+
+{base_context}
+
+Generate TWO sections with rich, specific, client-tailored content.
+Do NOT use generic consulting language. Reference the client's actual situation.
+
+Return JSON:
 {{
-  "cover": {{
-    "title": "Proposal title",
-    "subtitle": "e.g. Technical Proposal | Confidential",
-    "client": "client name",
-    "date": "Month Year"
-  }},
   "executive_summary": {{
-    "title": "Executive Summary",
-    "our_understanding": "2-3 sentences",
-    "our_approach": "2-3 sentences",
-    "our_commitment": "1-2 sentences"
+    "our_understanding": "4-5 sentences explaining what we understand the client is trying to achieve, the specific challenges they face, and the strategic context. Reference their actual situation from the research above.",
+    "our_approach": "4-5 sentences describing how Protiviti will tackle this — specific methodology, phasing logic, and what makes our approach right for this client.",
+    "our_commitment": "2-3 sentences on what success looks like and our commitment to outcomes — not activities.",
+    "key_outcomes": ["Specific outcome 1 we will deliver", "Specific outcome 2", "Specific outcome 3", "Specific outcome 4"]
   }},
   "our_understanding": {{
     "title": "Our Understanding of Your Challenge",
-    "key_drivers": ["driver 1", "driver 2", "driver 3"],
-    "challenges_identified": ["challenge 1", "challenge 2"],
-    "success_factors": ["factor 1", "factor 2"]
-  }},
+    "context_narrative": "3-4 sentences setting the strategic context — what is happening in this client's world that makes this engagement necessary now.",
+    "key_drivers": [
+      {{"driver": "Driver headline", "detail": "2-3 sentences explaining this driver and why it matters to this client specifically"}},
+      {{"driver": "Driver headline", "detail": "2-3 sentences"}},
+      {{"driver": "Driver headline", "detail": "2-3 sentences"}},
+      {{"driver": "Driver headline", "detail": "2-3 sentences"}}
+    ],
+    "challenges_identified": [
+      {{"challenge": "Challenge headline", "implication": "What this means for the client if not addressed"}},
+      {{"challenge": "Challenge headline", "implication": "What this means"}},
+      {{"challenge": "Challenge headline", "implication": "What this means"}}
+    ],
+    "success_factors": [
+      {{"factor": "Success factor", "why": "Why this is critical for this specific engagement"}},
+      {{"factor": "Success factor", "why": "Why this is critical"}},
+      {{"factor": "Success factor", "why": "Why this is critical"}}
+    ],
+    "our_perspective": "2-3 sentences sharing Protiviti's specific perspective on this challenge based on our regional experience."
+  }}
+}}
+Return only valid JSON."""
+    try:
+        return _parse_json_response(_call_claude(prompt, max_tokens=3000))
+    except Exception as e:
+        return {"executive_summary": {}, "our_understanding": {}}
+
+
+def _gen_section2(base_context: str, rfp_intel: dict, ctx: dict) -> dict:
+    """Value Proposition + Past Relationship."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing a technical proposal.
+
+{base_context}
+
+Generate TWO sections. Be specific and differentiated — avoid generic consulting language.
+Every statement should be directly connected to this client's situation.
+
+Return JSON:
+{{
   "value_proposition": {{
     "title": "Our Value Proposition",
-    "headline": "One powerful sentence",
+    "headline": "One powerful, specific sentence capturing what Protiviti uniquely delivers for this client",
     "value_points": [
-      {{"point": "Value point 1", "detail": "Supporting detail"}},
-      {{"point": "Value point 2", "detail": "Supporting detail"}},
-      {{"point": "Value point 3", "detail": "Supporting detail"}}
+      {{
+        "point": "Value point headline",
+        "detail": "3-4 sentences explaining this value point specifically — how we deliver it, what it means for this client, and what evidence we have from similar engagements",
+        "proof_point": "A specific example or outcome from a past engagement"
+      }},
+      {{
+        "point": "Value point headline",
+        "detail": "3-4 sentences",
+        "proof_point": "Specific example"
+      }},
+      {{
+        "point": "Value point headline",
+        "detail": "3-4 sentences",
+        "proof_point": "Specific example"
+      }},
+      {{
+        "point": "Value point headline",
+        "detail": "3-4 sentences",
+        "proof_point": "Specific example"
+      }}
     ],
-    "protiviti_differentiators": ["differentiator 1", "differentiator 2"]
+    "protiviti_differentiators": [
+      "Differentiator 1 — specific to Protiviti ME, not generic",
+      "Differentiator 2",
+      "Differentiator 3",
+      "Differentiator 4",
+      "Differentiator 5"
+    ],
+    "what_sets_us_apart": "2-3 sentences on what genuinely distinguishes Protiviti for this engagement vs. competitors"
   }},
   "past_relationship": {{
-    "title": "Our Relationship with [Client]",
-    "relationship_narrative": "narrative based on context provided",
-    "past_engagements": ["engagement 1", "engagement 2"],
-    "continuity_benefit": "How prior knowledge benefits this engagement"
-  }},
+    "title": "Our Relationship with {rfp_intel.get('client_name', 'the Client')}",
+    "relationship_narrative": "3-4 sentences describing the relationship history, trust built, and how prior knowledge of the client's organization directly benefits this engagement. If new client, describe our approach to onboarding quickly.",
+    "past_engagements": [
+      {{"engagement": "Engagement title", "year": "Year", "outcome": "What was delivered and the result"}},
+      {{"engagement": "Engagement title", "year": "Year", "outcome": "What was delivered"}}
+    ],
+    "continuity_benefit": "3-4 sentences on how prior relationship knowledge — of their people, culture, processes, and challenges — accelerates this engagement and reduces client effort.",
+    "client_investment_protection": "2 sentences on how we build on prior work rather than starting from scratch."
+  }}
+}}
+Return only valid JSON."""
+    try:
+        return _parse_json_response(_call_claude(prompt, max_tokens=3000))
+    except Exception as e:
+        return {"value_proposition": {}, "past_relationship": {}}
+
+
+def _gen_scope(base_context: str, rfp_intel: dict) -> dict:
+    """Scope of Work — most detailed section."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East designing the scope of work.
+
+{base_context}
+
+Design a DETAILED scope of work with 3-4 phases. Each phase must have:
+- 2-4 L1 deliverables
+- Each L1 must have 4-6 specific L2 sub-deliverables (not vague — describe exactly what each document/output is)
+
+The scope must directly address every deliverable and objective mentioned in the RFP.
+Be prescriptive and specific — a client should be able to understand exactly what they will receive.
+
+Return JSON:
+{{
   "scope_of_work": {{
     "title": "Scope of Work & Deliverables",
+    "scope_narrative": "3-4 sentences summarizing the overall scope and the logic of how the phases build on each other.",
     "phases": [
       {{
-        "phase_name": "Phase 1: ...",
-        "phase_objective": "...",
+        "phase_name": "Phase 1: [Specific Name]",
+        "phase_objective": "2-3 sentences on what this phase achieves and why it comes first.",
+        "duration": "e.g. Weeks 1-4",
         "deliverables_l1": [
           {{
-            "name": "Deliverable name",
-            "description": "What this delivers",
-            "sub_deliverables": ["L2 item 1", "L2 item 2", "L2 item 3"]
+            "name": "L1 Deliverable Name",
+            "description": "2-3 sentences on what this deliverable is, who it is for, and what decision or action it enables.",
+            "format": "e.g. PowerPoint report, Word document, Workshop",
+            "sub_deliverables": [
+              "L2: Specific sub-deliverable — describe what it contains",
+              "L2: Specific sub-deliverable — describe what it contains",
+              "L2: Specific sub-deliverable — describe what it contains",
+              "L2: Specific sub-deliverable — describe what it contains",
+              "L2: Specific sub-deliverable — describe what it contains"
+            ]
           }}
-        ]
+        ],
+        "phase_milestone": "The key milestone/sign-off at the end of this phase"
       }}
-    ]
-  }},
+    ],
+    "in_scope_summary": ["In-scope item 1", "In-scope item 2", "In-scope item 3"],
+    "out_of_scope": ["Out of scope item 1", "Out of scope item 2", "Out of scope item 3"]
+  }}
+}}
+Return only valid JSON."""
+    try:
+        return _parse_json_response(_call_claude(prompt, max_tokens=4000))
+    except Exception as e:
+        return {"scope_of_work": {}}
+
+
+def _gen_approach(base_context: str, rfp_intel: dict) -> dict:
+    """Approach & Methodology."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing the methodology section.
+
+{base_context}
+
+Write a DETAILED approach and methodology section. This should explain HOW we work,
+not just what we deliver. Reference specific Protiviti frameworks, tools, and methodologies.
+Show intellectual rigor — a client reading this should feel confident we know exactly how to do this.
+
+Return JSON:
+{{
   "approach_methodology": {{
     "title": "Our Approach & Methodology",
-    "approach_narrative": "2-3 sentences on overall approach",
-    "methodology_steps": [
-      {{"step": "Step name", "activities": ["activity 1", "activity 2"]}},
+    "approach_narrative": "4-5 sentences describing our overall approach philosophy — how we balance analysis with pragmatism, how we engage stakeholders, how we ensure outputs are implementable not just theoretical.",
+    "guiding_principles": [
+      {{"principle": "Principle name", "description": "2-3 sentences on what this means in practice for this engagement"}},
+      {{"principle": "Principle name", "description": "2-3 sentences"}},
+      {{"principle": "Principle name", "description": "2-3 sentences"}},
+      {{"principle": "Principle name", "description": "2-3 sentences"}}
     ],
-    "tools_and_accelerators": ["tool/framework 1", "tool/framework 2"]
-  }},
+    "methodology_steps": [
+      {{
+        "step": "Step name (e.g. Current State Diagnostic)",
+        "description": "3-4 sentences on what we do in this step, how we do it, and what output it produces",
+        "activities": [
+          "Specific activity 1 — describe what it involves",
+          "Specific activity 2",
+          "Specific activity 3",
+          "Specific activity 4"
+        ],
+        "techniques": ["Technique/tool used", "Technique/tool used"]
+      }}
+    ],
+    "stakeholder_engagement": "3-4 sentences on how we engage client stakeholders throughout — workshops, interviews, reviews, validations.",
+    "quality_control": "3-4 sentences on how we ensure quality — peer review, Director sign-off, client feedback loops.",
+    "tools_and_accelerators": [
+      {{"tool": "Tool/framework name", "use_case": "How we use this specifically in this engagement", "benefit": "What it saves or improves"}},
+      {{"tool": "Tool/framework name", "use_case": "How we use this", "benefit": "Benefit"}},
+      {{"tool": "Tool/framework name", "use_case": "How we use this", "benefit": "Benefit"}}
+    ],
+    "knowledge_transfer": "2-3 sentences on how we ensure the client's team can own and sustain the outputs after we leave."
+  }}
+}}
+Return only valid JSON."""
+    try:
+        return _parse_json_response(_call_claude(prompt, max_tokens=3500))
+    except Exception as e:
+        return {"approach_methodology": {}}
+
+
+def _gen_delivery(base_context: str, rfp_intel: dict) -> dict:
+    """Engagement Governance + Team + Timeline."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing the delivery sections.
+
+{base_context}
+
+Write THREE detailed sections. Be specific — give the client a clear picture of how the engagement
+will be managed, who will do the work, and when things will happen.
+
+Return JSON:
+{{
   "engagement_governance": {{
     "title": "Engagement Governance",
-    "governance_structure": "Description of steering committee, etc.",
-    "reporting_cadence": ["Weekly status report", "Monthly steering committee", "etc."],
-    "escalation_path": "Description",
-    "raci_summary": [
-      {{"activity": "activity name", "protiviti": "R/A/C/I", "client": "R/A/C/I"}}
+    "governance_narrative": "3-4 sentences on the governance philosophy — how we keep the engagement on track, how decisions are made, how issues are escalated.",
+    "governance_structure": {{
+      "steering_committee": "Who sits on it, what it does, how often it meets",
+      "working_group": "Day-to-day working team composition and meeting cadence",
+      "protiviti_leadership": "How Protiviti senior leadership stays engaged"
+    }},
+    "reporting_cadence": [
+      {{"report": "Report name", "frequency": "Weekly/monthly/etc", "audience": "Who receives it", "content": "What it covers"}},
+      {{"report": "Report name", "frequency": "Frequency", "audience": "Audience", "content": "Content"}},
+      {{"report": "Report name", "frequency": "Frequency", "audience": "Audience", "content": "Content"}}
     ],
-    "quality_assurance": "QA approach"
+    "escalation_path": "Step-by-step description of how issues are escalated — from working team to Protiviti Director to client senior leadership.",
+    "raci_summary": [
+      {{"activity": "Specific activity", "protiviti": "R", "client": "A"}},
+      {{"activity": "Specific activity", "protiviti": "R", "client": "C"}},
+      {{"activity": "Specific activity", "protiviti": "A", "client": "R"}},
+      {{"activity": "Specific activity", "protiviti": "C", "client": "R"}},
+      {{"activity": "Specific activity", "protiviti": "R", "client": "I"}},
+      {{"activity": "Specific activity", "protiviti": "I", "client": "R"}}
+    ],
+    "quality_assurance": "3-4 sentences on QA — how deliverables are reviewed internally before submission, Director sign-off process, client review cycles.",
+    "risk_management": "2-3 sentences on how engagement risks are identified, tracked, and mitigated."
   }},
   "project_team": {{
     "title": "Our Project Team",
-    "team_narrative": "Why this team is right for this engagement",
+    "team_narrative": "3-4 sentences on why this specific team is right for this engagement — their combined experience, regional knowledge, and sector expertise.",
     "team_members": [
       {{
-        "role": "e.g. Engagement Director",
-        "responsibilities": ["responsibility 1", "responsibility 2"],
-        "relevant_experience": "Brief note"
+        "role": "Engagement Director",
+        "title": "Senior Director, Protiviti Middle East",
+        "responsibilities": [
+          "Overall engagement accountability and quality",
+          "Executive-level client relationship management",
+          "Strategic direction and methodology oversight",
+          "Senior review of all deliverables before submission"
+        ],
+        "relevant_experience": "3-4 sentences on relevant experience for this specific engagement — sectors, engagement types, similar clients."
+      }},
+      {{
+        "role": "Engagement Manager",
+        "title": "Manager / Senior Manager",
+        "responsibilities": [
+          "Day-to-day engagement management",
+          "Stakeholder coordination and workshop facilitation",
+          "Quality review of team outputs",
+          "Client point of contact for working-level matters"
+        ],
+        "relevant_experience": "3-4 sentences on relevant experience."
+      }},
+      {{
+        "role": "Senior Consultant",
+        "title": "Senior Consultant",
+        "responsibilities": [
+          "Primary analysis and deliverable development",
+          "Stakeholder interviews and data gathering",
+          "Document drafting and review",
+          "Benchmarking and research"
+        ],
+        "relevant_experience": "3-4 sentences on relevant experience."
+      }},
+      {{
+        "role": "Consultant / Analyst",
+        "title": "Consultant",
+        "responsibilities": [
+          "Data collection and analysis support",
+          "Document formatting and production",
+          "Research and benchmarking support",
+          "Action tracking and project coordination"
+        ],
+        "relevant_experience": "2-3 sentences on relevant experience."
       }}
-    ]
+    ],
+    "subject_matter_experts": "2-3 sentences on any SME support available from Protiviti's global network that can be called upon for specialist input."
   }},
   "timeline": {{
     "title": "Engagement Timeline",
-    "total_duration": "e.g. 16 weeks",
+    "total_duration": "X weeks",
+    "timeline_narrative": "2-3 sentences on the overall timeline logic and key assumptions.",
     "phases": [
       {{
-        "phase": "Phase 1: ...",
-        "duration": "e.g. Weeks 1-4",
-        "key_milestones": ["milestone 1", "milestone 2"],
-        "key_deliverables": ["deliverable 1"]
+        "phase": "Phase 1: [Name]",
+        "duration": "Weeks X-Y",
+        "key_activities": ["Activity 1", "Activity 2", "Activity 3"],
+        "key_milestones": ["Milestone 1", "Milestone 2"],
+        "key_deliverables": ["Deliverable 1", "Deliverable 2"],
+        "client_inputs_required": ["What we need from the client in this phase"]
       }}
-    ]
-  }},
+    ],
+    "critical_path": "2-3 sentences on what drives the timeline and key dependencies that could affect it.",
+    "mobilisation": "2-3 sentences on how quickly we can mobilise after contract signature."
+  }}
+}}
+Return only valid JSON."""
+    try:
+        return _parse_json_response(_call_claude(prompt, max_tokens=4000))
+    except Exception as e:
+        return {"engagement_governance": {}, "project_team": {}, "timeline": {}}
+
+
+def _gen_credibility(base_context: str, rfp_intel: dict, past_context: str) -> dict:
+    """Relevant Experience + Why Protiviti + Assumptions."""
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing the credibility sections.
+
+{base_context}
+
+PAST PROPOSALS (for case study inspiration):
+{past_context[:1500]}
+
+Write THREE sections that build confidence and close the proposal strongly.
+Case studies must feel real and specific — draw from the past proposals above.
+
+Return JSON:
+{{
   "relevant_experience": {{
     "title": "Our Relevant Experience",
-    "narrative": "2 sentences",
+    "narrative": "3-4 sentences on Protiviti ME's track record in this specific engagement type and sector, with specific reference to UAE/KSA clients.",
+    "regional_credentials": "2-3 sentences specifically on our GCC/UAE/KSA market presence and depth.",
     "case_studies": [
       {{
-        "client_type": "e.g. Government Real Estate Authority",
-        "engagement": "engagement title",
-        "our_role": "what we did",
-        "outcome": "result achieved"
+        "client_type": "e.g. Government Real Estate Authority, UAE",
+        "engagement": "Specific engagement title",
+        "context": "2 sentences on what the client needed and why",
+        "our_role": "3-4 sentences on exactly what Protiviti did — be specific about methodology, deliverables, team",
+        "outcome": "2-3 sentences on specific, measurable outcomes achieved",
+        "relevance": "1-2 sentences on why this case study is directly relevant to this proposal"
+      }},
+      {{
+        "client_type": "Client type",
+        "engagement": "Engagement title",
+        "context": "2 sentences",
+        "our_role": "3-4 sentences",
+        "outcome": "2-3 sentences on outcomes",
+        "relevance": "1-2 sentences"
+      }},
+      {{
+        "client_type": "Client type",
+        "engagement": "Engagement title",
+        "context": "2 sentences",
+        "our_role": "3-4 sentences",
+        "outcome": "2-3 sentences",
+        "relevance": "1-2 sentences"
       }}
     ]
   }},
   "why_protiviti": {{
     "title": "Why Protiviti",
-    "headline": "One compelling sentence",
+    "headline": "One compelling, specific sentence — not generic",
+    "closing_narrative": "3-4 sentences making the case for why Protiviti is the right choice — combining regional expertise, sector depth, team quality, and track record.",
     "reasons": [
-      {{"reason": "Reason headline", "detail": "Supporting detail"}}
+      {{
+        "reason": "Reason headline",
+        "detail": "3-4 sentences with specific evidence — numbers, client names (anonymised), outcomes, or capabilities that prove this reason"
+      }},
+      {{
+        "reason": "Reason headline",
+        "detail": "3-4 sentences with specific evidence"
+      }},
+      {{
+        "reason": "Reason headline",
+        "detail": "3-4 sentences with specific evidence"
+      }},
+      {{
+        "reason": "Reason headline",
+        "detail": "3-4 sentences with specific evidence"
+      }},
+      {{
+        "reason": "Reason headline",
+        "detail": "3-4 sentences with specific evidence"
+      }}
     ]
   }},
   "key_assumptions": {{
     "title": "Key Assumptions & Dependencies",
-    "assumptions": ["assumption 1", "assumption 2"],
-    "client_dependencies": ["dependency 1", "dependency 2"],
-    "out_of_scope": ["item 1", "item 2"]
+    "assumptions": [
+      "Assumption 1 — be specific about what we are assuming and why it matters",
+      "Assumption 2",
+      "Assumption 3",
+      "Assumption 4",
+      "Assumption 5"
+    ],
+    "client_dependencies": [
+      "What the client must provide/do — be specific about timing and format",
+      "Client dependency 2",
+      "Client dependency 3",
+      "Client dependency 4"
+    ],
+    "out_of_scope": [
+      "Out of scope item 1 — be specific",
+      "Out of scope item 2",
+      "Out of scope item 3",
+      "Out of scope item 4"
+    ],
+    "variation_trigger": "2-3 sentences on what would trigger a scope variation and how it would be handled."
   }}
 }}
-
 Return only valid JSON."""
-
     try:
-        return _parse_json_response(_call_claude(prompt, max_tokens=6000))
+        return _parse_json_response(_call_claude(prompt, max_tokens=4000))
     except Exception as e:
-        return {"error": str(e)}
+        return {"relevant_experience": {}, "why_protiviti": {}, "key_assumptions": {}}
 
 
 def _generate_effort_model(rfp_intel: dict, technical: dict) -> dict:
