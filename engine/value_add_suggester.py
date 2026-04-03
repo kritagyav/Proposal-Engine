@@ -13,10 +13,31 @@ Returns a list of suggested additions with:
 - Whether to include in base scope or propose as optional add-on
 """
 import json
+import time
 import anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, BLENDED_RATE_USD
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def _call_claude(prompt: str, max_tokens: int = 4000, retries: int = 3) -> str:
+    for attempt in range(retries):
+        try:
+            response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+        except anthropic.RateLimitError:
+            if attempt < retries - 1:
+                wait = 60 * (attempt + 1)
+                print(f"  Rate limit. Waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+        except Exception:
+            raise
 
 
 def generate_value_add_suggestions(
@@ -40,11 +61,11 @@ CLIENT: {rfp_intel.get('client_name', '')}
 SECTOR: {rfp_intel.get('sector', '')}
 GEOGRAPHY: {rfp_intel.get('geography', 'UAE')}
 
-CURRENT PROPOSED SCOPE:
-{json.dumps(current_scope, indent=2)}
+CURRENT PROPOSED SCOPE (summary):
+{json.dumps(current_scope, indent=2)[:2000]}
 
 LEADING PRACTICE RESEARCH:
-{json.dumps(leading_practices, indent=2)}
+{json.dumps(leading_practices, indent=2)[:1500]}
 
 CLIENT CONTEXT:
 - Core problem: {rfp_intel.get('core_problem', '')}
@@ -84,14 +105,8 @@ Calculate estimated_fee_usd = estimated_hours × {BLENDED_RATE_USD}.
 Be specific and practical. Avoid generic consulting suggestions.
 Return only valid JSON array."""
 
-    response = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=4000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
     try:
-        text = response.content[0].text.strip()
+        text = _call_claude(prompt, max_tokens=3000).strip()
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
