@@ -46,22 +46,21 @@ def extract_proposal_intelligence(rfp_intel: dict, similar_proposals: list[dict]
 
     combined = "\n\n".join(proposal_texts)
 
-    prompt = f"""You are analyzing Protiviti Middle East's past winning proposals to extract
-intelligence for a new proposal. Act like NotebookLM — read the documents deeply and
-extract specific, reusable insights.
+    prompt = f"""You are analyzing Protiviti Middle East's past winning proposals.
+Your job is to extract CONCRETE, REUSABLE intelligence — not summaries.
+Quote actual language where possible. A proposal writer should be able to copy-paste from your output.
 
-NEW ENGAGEMENT CONTEXT:
+NEW ENGAGEMENT:
 - Client: {rfp_intel.get('client_name', '')}
 - Type: {rfp_intel.get('engagement_type', '')}
 - Sector: {rfp_intel.get('sector', '')}
 - Geography: {rfp_intel.get('geography', 'UAE')}
 - Core Problem: {rfp_intel.get('core_problem', '')}
 
-PAST PROPOSALS TO ANALYZE:
+PAST PROPOSALS:
 {combined}
 
-Extract the following intelligence. Be specific — quote or paraphrase actual content
-from the proposals where relevant.
+Extract concrete, specific intelligence. Quote directly from the proposals — do not paraphrase into generics.
 
 Return a JSON object:
 {{

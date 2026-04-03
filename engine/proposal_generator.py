@@ -1,12 +1,18 @@
 """
 Core intelligence: calls Claude API to generate proposal content.
 Uses past proposals from vector DB as context + live web research.
+
+Synthesis-first approach:
+  Every section generator receives actual text from the most relevant past proposal
+  and is instructed to ADAPT it, not generate from scratch. This ensures the output
+  reflects Protiviti's real language, structure, and quality — not generic AI text.
 """
+import re
 import json
 import time
 import anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, BLENDED_RATE_USD
-from ingest.vector_store import search_similar_proposals
+from ingest.vector_store import search_similar_proposals, _load_index
 from engine.web_researcher import research_client_and_context
 from engine.value_add_suggester import generate_value_add_suggestions, format_suggestions_for_slide
 from engine.proposal_intelligence import extract_proposal_intelligence, format_intelligence_for_prompt
@@ -45,6 +51,56 @@ def _parse_json_response(text: str) -> dict | list:
     return json.loads(text.strip())
 
 
+def _get_full_texts(similar: list[dict]) -> list[str]:
+    """Load full proposal text for each similar proposal from the index."""
+    index = _load_index()
+    texts = []
+    filenames = {p["filename"] for p in similar}
+    for p in index.get("proposals", []):
+        if p["filename"] in filenames:
+            texts.append(f"=== FROM: {p['filename']} ===\n{p.get('text', '')}")
+    return texts
+
+
+def _extract_slides_by_keywords(full_text: str, keywords: list[str], max_chars: int = 3000) -> str:
+    """
+    Extract slides/pages from proposal text that contain any of the given keywords.
+    Returns the most relevant content up to max_chars.
+    """
+    # Split by slide or page markers
+    parts = re.split(r'\[(?:Slide|Page)\s+\d+\]', full_text)
+    relevant = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if any(kw.lower() in part.lower() for kw in keywords):
+            relevant.append(part)
+    combined = "\n\n---\n\n".join(relevant)
+    return combined[:max_chars] if combined else full_text[:max_chars]
+
+
+def _build_source_material(similar: list[dict], section_keywords: list[str], max_chars: int = 3000) -> str:
+    """
+    Extract section-specific source material from the top past proposals.
+    Returns formatted text to use as a synthesis base.
+    """
+    if not similar:
+        return ""
+    full_texts = _get_full_texts(similar[:3])
+    if not full_texts:
+        return ""
+    extracted = []
+    for text_block in full_texts[:2]:
+        # Get filename from header
+        header = text_block.split("\n")[0]
+        body = "\n".join(text_block.split("\n")[1:])
+        section_text = _extract_slides_by_keywords(body, section_keywords, max_chars=max_chars // 2)
+        if section_text.strip():
+            extracted.append(f"{header}\n{section_text}")
+    return "\n\n".join(extracted) if extracted else full_texts[0][:max_chars]
+
+
 def generate_proposal(rfp_text: str, client_context: dict, clarification_context: str = "") -> dict:
     """
     Master function: generates all proposal content from RFP + context.
@@ -78,7 +134,7 @@ def generate_proposal(rfp_text: str, client_context: dict, clarification_context
     print("Generating technical proposal...")
     technical = _generate_technical_proposal(rfp_intel, past_context, client_context,
                                               web_research, intelligence_context,
-                                              clarification_context)
+                                              clarification_context, similar)
 
     # Step 5: Generate value-add suggestions
     print("Generating leading practice value-add suggestions...")
@@ -154,17 +210,40 @@ Return only valid JSON, no other text."""
 def _generate_technical_proposal(rfp_intel: dict, past_context: str,
                                   ctx: dict, web_research: dict = None,
                                   intelligence_context: str = "",
-                                  clarification_context: str = "") -> dict:
+                                  clarification_context: str = "",
+                                  similar: list = None) -> dict:
     """
     Generate the technical proposal section by section.
-    Each section gets a dedicated focused call — produces full depth.
+    Each section gets a dedicated focused call AND section-specific source
+    material extracted from the most relevant past proposals.
     """
     web_research = web_research or {}
+    similar = similar or []
     client_profile = web_research.get("client_profile", {})
     sector_context = web_research.get("sector_context", {})
 
-    # Shared context block injected into every section prompt
-    base_context = f"""ENGAGEMENT CONTEXT:
+    # Build web research summary — skip empty fields to keep prompts clean
+    web_client = ""
+    if client_profile.get("organization_overview"):
+        web_client = f"""CLIENT RESEARCH (from web):
+- Overview: {client_profile.get('organization_overview', '')}
+- Strategic Context: {client_profile.get('strategic_context', '')}
+- Leadership Priorities: {', '.join(client_profile.get('leadership_priorities', [])[:3])}
+- Known Challenges: {', '.join(client_profile.get('known_challenges', [])[:3])}
+- Recent Initiatives: {', '.join([i.get('initiative', i) if isinstance(i, dict) else i for i in client_profile.get('recent_initiatives', [])[:3]])}"""
+
+    web_sector = ""
+    if sector_context.get("sector_overview"):
+        web_sector = f"""SECTOR CONTEXT (from web):
+- {sector_context.get('sector_overview', '')}
+- Drivers: {', '.join(sector_context.get('transformation_drivers', [])[:3])}
+- National Programs: {', '.join([p.get('program', p) if isinstance(p, dict) else p for p in sector_context.get('national_programs', [])[:3]])}"""
+
+    clarif = (f"\nCLARIFICATION FROM PROPOSAL TEAM (highest priority — override any assumption):\n{clarification_context}"
+              if clarification_context else "")
+
+    # Core engagement facts — used in every section
+    base_context = f"""ENGAGEMENT FACTS (from RFP):
 - Client: {rfp_intel.get('client_name', '')}
 - Project: {rfp_intel.get('project_title', '')}
 - Engagement Type: {rfp_intel.get('engagement_type', '')}
@@ -172,51 +251,48 @@ def _generate_technical_proposal(rfp_intel: dict, past_context: str,
 - Geography: {rfp_intel.get('geography', 'UAE')}
 - Core Problem: {rfp_intel.get('core_problem', '')}
 - Key Objectives: {', '.join(rfp_intel.get('key_objectives', []))}
-- Deliverables Mentioned in RFP: {', '.join(rfp_intel.get('deliverables_mentioned', []))}
+- Deliverables in RFP: {', '.join(rfp_intel.get('deliverables_mentioned', []))}
 - Key Challenges: {', '.join(rfp_intel.get('key_challenges', []))}
 - Stakeholders: {', '.join(rfp_intel.get('stakeholders_mentioned', []))}
 - Timeline: {rfp_intel.get('timeline_mentioned', 'Not specified')}
 - Relationship History: {ctx.get('relationship_history', 'New client')}
-- Past Engagements: {ctx.get('past_engagements', 'None')}
-- Differentiators to Emphasize: {ctx.get('differentiators', 'None')}
-
-CLIENT RESEARCH:
-- Overview: {client_profile.get('organization_overview', '')}
-- Strategic Context: {client_profile.get('strategic_context', '')}
-- Leadership Priorities: {', '.join(client_profile.get('leadership_priorities', [])[:3])}
-- Known Challenges: {', '.join(client_profile.get('known_challenges', [])[:3])}
-- Recent Initiatives: {', '.join([i.get('initiative', i) if isinstance(i, dict) else i for i in client_profile.get('recent_initiatives', [])[:3]])}
-
-SECTOR CONTEXT:
-- {sector_context.get('sector_overview', '')}
-- Drivers: {', '.join(sector_context.get('transformation_drivers', [])[:3])}
-- National Programs: {', '.join([p.get('program', p) if isinstance(p, dict) else p for p in sector_context.get('national_programs', [])[:3]])}
-
-PROPOSAL INTELLIGENCE FROM PAST WINS:
-{intelligence_context}
-
-PAST PROPOSAL EXCERPTS:
-{past_context[:2000]}
-
-{f"CLARIFICATION FROM PROPOSAL TEAM (high-priority context):{chr(10)}{clarification_context}" if clarification_context else ""}"""
+- Past Engagements with Client: {ctx.get('past_engagements', 'None mentioned')}
+- Budget Range: {ctx.get('budget_range', 'Not specified')}
+- Key Differentiators: {ctx.get('differentiators', 'Not specified')}
+{web_client}
+{web_sector}
+INTELLIGENCE FROM PAST WINNING PROPOSALS:
+{intelligence_context}{clarif}"""
 
     print("  Generating: Executive Summary & Understanding...")
-    section1 = _gen_section1(base_context, rfp_intel, ctx)
+    src_exec = _build_source_material(
+        similar, ["executive summary", "understanding", "context", "background"], max_chars=2500)
+    section1 = _gen_section1(base_context, rfp_intel, ctx, src_exec)
 
     print("  Generating: Value Proposition & Relationship...")
-    section2 = _gen_section2(base_context, rfp_intel, ctx)
+    src_value = _build_source_material(
+        similar, ["value proposition", "differentiator", "why protiviti", "our approach"], max_chars=2500)
+    section2 = _gen_section2(base_context, rfp_intel, ctx, src_value)
 
     print("  Generating: Scope of Work (detailed)...")
-    section3 = _gen_scope(base_context, rfp_intel)
+    src_scope = _build_source_material(
+        similar, ["scope", "deliverable", "phase", "workstream", "work plan"], max_chars=3500)
+    section3 = _gen_scope(base_context, rfp_intel, src_scope)
 
     print("  Generating: Approach & Methodology...")
-    section4 = _gen_approach(base_context, rfp_intel)
+    src_approach = _build_source_material(
+        similar, ["approach", "methodology", "framework", "methodology", "how we work"], max_chars=2500)
+    section4 = _gen_approach(base_context, rfp_intel, src_approach)
 
     print("  Generating: Governance, Team & Timeline...")
-    section5 = _gen_delivery(base_context, rfp_intel)
+    src_delivery = _build_source_material(
+        similar, ["governance", "team", "project team", "timeline", "raci", "reporting"], max_chars=2500)
+    section5 = _gen_delivery(base_context, rfp_intel, src_delivery)
 
     print("  Generating: Experience, Why Protiviti & Assumptions...")
-    section6 = _gen_credibility(base_context, rfp_intel, past_context)
+    src_cred = _build_source_material(
+        similar, ["experience", "case study", "why protiviti", "credentials", "our work"], max_chars=3000)
+    section6 = _gen_credibility(base_context, rfp_intel, src_cred)
 
     # Merge all sections
     return {
@@ -235,18 +311,27 @@ PAST PROPOSAL EXCERPTS:
     }
 
 
-def _gen_section1(base_context: str, rfp_intel: dict, ctx: dict) -> dict:
+def _gen_section1(base_context: str, rfp_intel: dict, ctx: dict, source_material: str = "") -> dict:
     """Executive Summary + Our Understanding."""
-    prompt = f"""You are a Senior Director at Protiviti Middle East writing a high-quality technical proposal.
-Protiviti Middle East specializes in: Operating Model & Governance Frameworks, ePMO & PMO Setup,
-Maturity Assessments (organizational, departmental, functional), Enterprise Risk Management,
-Project Risk Management, Policies & Procedures, Operational Efficiency & Optimization.
-We have deep UAE and KSA real estate and infrastructure sector experience.
+    src_block = f"""SOURCE MATERIAL — ACTUAL TEXT FROM MOST RELEVANT PAST PROTIVITI PROPOSAL:
+{source_material}
+
+INSTRUCTION: Use the above as your PRIMARY source. Extract language, structure, and framing from it.
+Adapt it for the new client below — replace names, update context, sharpen for this specific engagement.
+DO NOT generate generic consulting language. Every sentence must be traceable to either the source
+material above or the specific RFP facts below.""" if source_material else ""
+
+    prompt = f"""You are a Senior Director at Protiviti Middle East writing a technical proposal.
+Protiviti ME specializes in: Operating Model & Governance, ePMO/PMO Setup, Maturity Assessments,
+Enterprise Risk Management, Project Risk Management, Policies & Procedures, Operational Efficiency.
+Deep UAE and KSA real estate and infrastructure experience.
+
+{src_block}
 
 {base_context}
 
-Generate TWO sections with rich, specific, client-tailored content.
-Do NOT use generic consulting language. Reference the client's actual situation.
+Generate TWO sections. Be specific and client-tailored — not generic.
+Every statement must reflect this client's real situation, not a template.
 
 Return JSON:
 {{
@@ -285,14 +370,22 @@ Return only valid JSON."""
         return {"executive_summary": {}, "our_understanding": {}}
 
 
-def _gen_section2(base_context: str, rfp_intel: dict, ctx: dict) -> dict:
+def _gen_section2(base_context: str, rfp_intel: dict, ctx: dict, source_material: str = "") -> dict:
     """Value Proposition + Past Relationship."""
+    src_block = f"""SOURCE MATERIAL FROM PAST PROTIVITI PROPOSAL:
+{source_material}
+
+INSTRUCTION: Extract our real differentiators and value proposition language from the above.
+Adapt them for this client. Do not invent new capabilities — draw from what we have proven.""" if source_material else ""
+
     prompt = f"""You are a Senior Director at Protiviti Middle East writing a technical proposal.
+
+{src_block}
 
 {base_context}
 
-Generate TWO sections. Be specific and differentiated — avoid generic consulting language.
-Every statement should be directly connected to this client's situation.
+Generate TWO sections. Be specific — every point must be grounded in our actual work or this client's situation.
+Avoid generic consulting language entirely.
 
 Return JSON:
 {{
@@ -348,18 +441,26 @@ Return only valid JSON."""
         return {"value_proposition": {}, "past_relationship": {}}
 
 
-def _gen_scope(base_context: str, rfp_intel: dict) -> dict:
+def _gen_scope(base_context: str, rfp_intel: dict, source_material: str = "") -> dict:
     """Scope of Work — most detailed section."""
+    src_block = f"""SCOPE SECTIONS FROM OUR MOST RELEVANT PAST PROPOSALS:
+{source_material}
+
+CRITICAL INSTRUCTION: Use the above scope as your structural template.
+- Adopt the same phase names, deliverable naming conventions, and L2 format where applicable
+- Adapt the content for the new engagement type and client
+- If a deliverable appears in the source AND aligns with this RFP, keep it (adapted)
+- Only add new deliverables where the RFP explicitly requires something not covered
+- The quality, specificity, and format of sub-deliverables must match the source material""" if source_material else ""
+
     prompt = f"""You are a Senior Director at Protiviti Middle East designing the scope of work.
+
+{src_block}
 
 {base_context}
 
-Design a DETAILED scope of work with 3-4 phases. Each phase must have:
-- 2-4 L1 deliverables
-- Each L1 must have 4-6 specific L2 sub-deliverables (not vague — describe exactly what each document/output is)
-
-The scope must directly address every deliverable and objective mentioned in the RFP.
-Be prescriptive and specific — a client should be able to understand exactly what they will receive.
+Design a DETAILED scope with 3-4 phases, 2-4 L1 deliverables per phase, 4-6 specific L2 sub-deliverables per L1.
+Address every deliverable mentioned in the RFP. Every L2 must describe what the document/output actually IS — not vague.
 
 Return JSON:
 {{
@@ -399,15 +500,23 @@ Return only valid JSON."""
         return {"scope_of_work": {}}
 
 
-def _gen_approach(base_context: str, rfp_intel: dict) -> dict:
+def _gen_approach(base_context: str, rfp_intel: dict, source_material: str = "") -> dict:
     """Approach & Methodology."""
+    src_block = f"""APPROACH & METHODOLOGY FROM PAST PROTIVITI PROPOSALS:
+{source_material}
+
+INSTRUCTION: Extract our actual methodology steps, tools, and approach language from the above.
+These represent how Protiviti ME actually works. Use them as the foundation and adapt for this engagement.
+Do not invent a new methodology — refine what we have proven.""" if source_material else ""
+
     prompt = f"""You are a Senior Director at Protiviti Middle East writing the methodology section.
+
+{src_block}
 
 {base_context}
 
-Write a DETAILED approach and methodology section. This should explain HOW we work,
-not just what we deliver. Reference specific Protiviti frameworks, tools, and methodologies.
-Show intellectual rigor — a client reading this should feel confident we know exactly how to do this.
+Write a DETAILED approach explaining HOW we work. Use specific Protiviti frameworks and tools from our past work above.
+Show intellectual rigor — a client should feel confident we have done this exact type of work before.
 
 Return JSON:
 {{
@@ -450,14 +559,22 @@ Return only valid JSON."""
         return {"approach_methodology": {}}
 
 
-def _gen_delivery(base_context: str, rfp_intel: dict) -> dict:
+def _gen_delivery(base_context: str, rfp_intel: dict, source_material: str = "") -> dict:
     """Engagement Governance + Team + Timeline."""
+    src_block = f"""GOVERNANCE, TEAM & TIMELINE FROM PAST PROTIVITI PROPOSALS:
+{source_material}
+
+INSTRUCTION: Use our actual governance models, team structures, and timeline formats from the above.
+Adapt them for this engagement's scope and duration. Keep specific Protiviti titles and reporting structures.""" if source_material else ""
+
     prompt = f"""You are a Senior Director at Protiviti Middle East writing the delivery sections.
+
+{src_block}
 
 {base_context}
 
-Write THREE detailed sections. Be specific — give the client a clear picture of how the engagement
-will be managed, who will do the work, and when things will happen.
+Write THREE detailed sections (governance, team, timeline). Be specific — actual Protiviti roles, real reporting cadence,
+realistic timeline phases that match the scope we are proposing.
 
 Return JSON:
 {{
@@ -562,17 +679,24 @@ Return only valid JSON."""
         return {"engagement_governance": {}, "project_team": {}, "timeline": {}}
 
 
-def _gen_credibility(base_context: str, rfp_intel: dict, past_context: str) -> dict:
+def _gen_credibility(base_context: str, rfp_intel: dict, source_material: str = "") -> dict:
     """Relevant Experience + Why Protiviti + Assumptions."""
+    src_block = f"""EXPERIENCE & CREDENTIALS FROM ACTUAL PAST PROTIVITI PROPOSALS:
+{source_material}
+
+CRITICAL INSTRUCTION: The case studies MUST be drawn from the above source material.
+Do not invent case studies. Extract real engagement descriptions, real client types, and real outcomes.
+Anonymise client names if needed but keep the substance real.
+If a case study in the source aligns with this engagement type, use it directly (adapted).""" if source_material else ""
+
     prompt = f"""You are a Senior Director at Protiviti Middle East writing the credibility sections.
+
+{src_block}
 
 {base_context}
 
-PAST PROPOSALS (for case study inspiration):
-{past_context[:1500]}
-
-Write THREE sections that build confidence and close the proposal strongly.
-Case studies must feel real and specific — draw from the past proposals above.
+Write THREE sections that build confidence and close strongly.
+Case studies must be drawn from our actual past work shown above — not invented.
 
 Return JSON:
 {{
